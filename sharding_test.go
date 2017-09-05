@@ -61,11 +61,13 @@ func TestGeertsAlgo(t *testing.T) {
 }
 
 func BenchmarkHealthyShard(b *testing.B) {
+	getShard = getShardGeertsAlgo
 	vdisk := orgVdiskData.Clone()
 	loopCallList(callList, vdisk)
 }
 
 func BenchmarkUnHealthyShard(b *testing.B) {
+	getShard = getShardGeertsAlgo
 	vdisk := vdiskWithUnheathyShard
 	loopCallList(callList, vdisk)
 }

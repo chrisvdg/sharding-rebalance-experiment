@@ -9,7 +9,7 @@ import (
 
 // defines the get shard algorithm
 var (
-	getShard = getShardIndexSimpleModulo
+	getShard = getShardGeertsAlgo
 )
 
 // Errors
