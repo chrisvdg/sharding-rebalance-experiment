@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+
+	blake2b "github.com/minio/blake2b-simd"
 )
 
 // defines the get shard algorithm
 var (
-	getShard = getShardIndexModulo
+	getShard = getShardIndexSimpleModulo
 )
 
 // Errors
@@ -60,6 +63,17 @@ func (vdisk *Vdisk) GetBlock(blockIndex int) (byte, error) {
 	return s.GetBlock(blockIndex)
 }
 
+// Clone returns a clone of a vdisk
+func (vdisk *Vdisk) Clone() *Vdisk {
+	newVdisk := new(Vdisk)
+
+	for _, shard := range vdisk.Shards {
+		newVdisk.Shards = append(newVdisk.Shards, shard.Clone())
+	}
+
+	return newVdisk
+}
+
 // FailShard set a shard to unhealthy and redistributes the data of the failed shard
 func (vdisk *Vdisk) FailShard(shardIndex int) error {
 	if shardIndex >= len(vdisk.Shards) {
@@ -110,18 +124,19 @@ func (vdisk *Vdisk) PrintShardingState() {
 }
 
 // GetShardIndex returns a shardindex for a given blockindex
-func getShardIndexModulo(vdisk *Vdisk, blockIndex int) (int, error) {
+func getShardIndexSimpleModulo(vdisk *Vdisk, blockIndex int) (int, error) {
 	return blockIndex % len(vdisk.Shards), nil
 }
 
 func getShardGeertsAlgo(vdisk *Vdisk, blockIndex int) (int, error) {
 	shardCount := len(vdisk.Shards)
 	shardIndex := blockIndex % shardCount
-	if vdisk.Shards[shardIndex].OK() {
+	s := vdisk.Shards[shardIndex]
+	if s.OK() {
 		return shardIndex, nil
 	}
 
-	shardIndex = hash(blockIndex)
+	shardIndex = hash(blockIndex, s.seedData, vdisk.HealthyShards())
 	shardCounter := 0
 
 	for i := 0; i < shardCount; i++ {
@@ -136,7 +151,17 @@ func getShardGeertsAlgo(vdisk *Vdisk, blockIndex int) (int, error) {
 	return 0, ErrShardIndexNotFound
 }
 
-func hash(blockIndex int) int {
+func hash(blockIndex int, shardFeedString []byte, healthyShards int) int {
+	binBlockIndex := make([]byte, 8)
+	binary.LittleEndian.PutUint64(binBlockIndex, uint64(blockIndex))
 
-	return 0
+	hasher := blake2b.New256()
+	hasher.Write(binBlockIndex)
+	hasher.Write(shardFeedString)
+
+	hash := hasher.Sum(nil)
+
+	hashIndex := hash[0]
+
+	return int(hashIndex) % healthyShards
 }

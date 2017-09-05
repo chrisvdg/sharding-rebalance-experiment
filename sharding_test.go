@@ -10,20 +10,24 @@ import (
 )
 
 var (
-	orgVdiskData *Vdisk
+	orgVdiskData           Vdisk
+	vdiskWithUnheathyShard *Vdisk
+	shardToFail            = 6
+	callList               []int
+	callAmount             = 1000000
 )
 
-func TestModuloSharding(t *testing.T) {
+func testSimpleModuloSharding(t *testing.T) {
 	assert := assert.New(t)
-	getShard = getShardIndexModulo
+	getShard = getShardIndexSimpleModulo
 
-	vdisk := orgVdiskData
+	vdisk := orgVdiskData.Clone()
 
 	vdisk.PrintShardingState()
 
 	err := vdisk.FailShard(2)
 
-	assert.Equal(err, ErrShardNotHealthy)
+	assert.Equal(ErrShardNotHealthy, err, "Expected to fail since it rebalaces to unhealthy shard")
 
 	vdisk.PrintShardingState()
 
@@ -32,13 +36,18 @@ func TestModuloSharding(t *testing.T) {
 func TestGeertsAlgo(t *testing.T) {
 	assert := assert.New(t)
 	getShard = getShardGeertsAlgo
+	vdisk := orgVdiskData.Clone()
 
-	vdisk := orgVdiskData
+	fmt.Println("\nreading with healthy shards")
+	err := loopCallList(callList, vdisk)
+	assert.NoError(err, "didn't expect an error")
 
-	vdisk.PrintShardingState()
-
-	err := vdisk.FailShard(6)
+	err = vdisk.FailShard(6)
 	assert.NoError(err)
+
+	fmt.Println("\nreading with 1 unhealthy shard")
+	err = loopCallList(callList, vdisk)
+	assert.NoError(err, "didn't expect an error")
 
 	// check if original shard 6 data is preserved
 	for blockindex, data := range orgVdiskData.Shards[6].data {
@@ -49,33 +58,75 @@ func TestGeertsAlgo(t *testing.T) {
 	}
 
 	vdisk.PrintShardingState()
+}
 
+func BenchmarkHealthyShard(b *testing.B) {
+	vdisk := orgVdiskData.Clone()
+	loopCallList(callList, vdisk)
+}
+
+func BenchmarkUnHealthyShard(b *testing.B) {
+	vdisk := vdiskWithUnheathyShard
+	loopCallList(callList, vdisk)
+}
+
+func loopCallList(callList []int, vdisk *Vdisk) error {
+	fmt.Printf("Reading vdisk %d times...\n", callAmount)
+	start1 := time.Now()
+
+	for _, blockAddress := range callList {
+		_, err := vdisk.GetBlock(blockAddress)
+		if err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("Reading took %s\n", time.Since(start1))
+	return nil
 }
 
 func generateVdisk(shards int, blocks int) *Vdisk {
 	vdisk := NewVdisk(shards)
 
-	fmt.Println("generating vdisk....")
 	for i := 0; i < blocks; i++ {
 		data := genRandomByte()
 		vdisk.SetBlock(i, data)
 	}
-	fmt.Println("vdisk generated.")
 
 	return vdisk
 }
 
 func genRandomByte() byte {
-	rand.Seed(int64(time.Now().Nanosecond()))
+	rand.Seed(time.Now().Unix())
 	n := rand.Intn(255)
 
 	return byte(n)
 }
 
+// generateCallList generates a list of addresses the calling test portion can use
+func generateCallList(lenght int, shard *Shard) []int {
+	var callList []int
+	rand.Seed(time.Now().Unix())
+
+	var blockAddresses []int
+	for blockAddress := range shard.data {
+		blockAddresses = append(blockAddresses, blockAddress)
+	}
+	addressLen := len(blockAddresses)
+	for i := 0; i < lenght; i++ {
+		callList = append(callList, blockAddresses[rand.Intn(addressLen)])
+	}
+
+	return callList
+}
+
 func init() {
 	var (
 		shards = 10
-		blocks = 1000
+		blocks = 10000
 	)
-	orgVdiskData = generateVdisk(shards, blocks)
+	orgVdiskData = *generateVdisk(shards, blocks)
+	callList = generateCallList(callAmount, orgVdiskData.Shards[shardToFail])
+	vdiskWithUnheathyShard = orgVdiskData.Clone()
+	vdiskWithUnheathyShard.FailShard(shardToFail)
 }
