@@ -10,20 +10,43 @@ import (
 )
 
 var (
-	orgData *Vdisk
+	orgVdiskData *Vdisk
 )
 
 func TestModuloSharding(t *testing.T) {
 	assert := assert.New(t)
 	getShard = getShardIndexModulo
 
-	vdisk := orgData
+	vdisk := orgVdiskData
 
 	vdisk.PrintShardingState()
 
 	err := vdisk.FailShard(2)
 
 	assert.Equal(err, ErrShardNotHealthy)
+
+	vdisk.PrintShardingState()
+
+}
+
+func TestGeertsAlgo(t *testing.T) {
+	assert := assert.New(t)
+	getShard = getShardGeertsAlgo
+
+	vdisk := orgVdiskData
+
+	vdisk.PrintShardingState()
+
+	err := vdisk.FailShard(6)
+	assert.NoError(err)
+
+	// check if original shard 6 data is preserved
+	for blockindex, data := range orgVdiskData.Shards[6].data {
+		newData, err := vdisk.GetBlock(blockindex)
+
+		assert.NoError(err)
+		assert.Equal(data, newData)
+	}
 
 	vdisk.PrintShardingState()
 
@@ -54,5 +77,5 @@ func init() {
 		shards = 10
 		blocks = 1000
 	)
-	orgData = generateVdisk(shards, blocks)
+	orgVdiskData = generateVdisk(shards, blocks)
 }

@@ -114,7 +114,7 @@ func getShardIndexModulo(vdisk *Vdisk, blockIndex int) (int, error) {
 	return blockIndex % len(vdisk.Shards), nil
 }
 
-func getShardGeertAlgo(vdisk *Vdisk, blockIndex int) (int, error) {
+func getShardGeertsAlgo(vdisk *Vdisk, blockIndex int) (int, error) {
 	shardCount := len(vdisk.Shards)
 	shardIndex := blockIndex % shardCount
 	if vdisk.Shards[shardIndex].OK() {
