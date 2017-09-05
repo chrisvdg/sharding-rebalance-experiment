@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -12,19 +14,18 @@ var (
 )
 
 func TestModuloSharding(t *testing.T) {
+	assert := assert.New(t)
 	getShard = getShardIndexModulo
 
 	vdisk := orgData
 
 	vdisk.PrintShardingState()
 
-	v, _ := vdisk.GetBlock(245)
+	err := vdisk.FailShard(2)
 
-	fmt.Printf("%v\n", v)
+	assert.Equal(err, ErrShardNotHealthy)
 
-}
-
-func TestModuloFail(t *testing.T) {
+	vdisk.PrintShardingState()
 
 }
 
