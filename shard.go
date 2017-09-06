@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-
-	"github.com/google/uuid"
 )
 
 // Error types
@@ -15,8 +13,7 @@ var (
 func NewShard() *Shard {
 	var s Shard
 
-	s.seedData, _ = uuid.New().MarshalBinary()
-	s.data = make(map[int]byte)
+	s.data = make(map[int64]byte)
 	s.Healthy = true
 
 	return &s
@@ -25,17 +22,17 @@ func NewShard() *Shard {
 // Shard represents a vdisk shard
 type Shard struct {
 	Healthy  bool
-	data     map[int]byte
+	data     map[int64]byte
 	seedData []byte
 }
 
 // SetBlock sets data in the shard
-func (s *Shard) SetBlock(blockAddress int, data byte) {
+func (s *Shard) SetBlock(blockAddress int64, data byte) {
 	s.data[blockAddress] = data
 }
 
 // GetBlock resturns the data from given block address
-func (s *Shard) GetBlock(blockAddress int) (byte, error) {
+func (s *Shard) GetBlock(blockAddress int64) (byte, error) {
 	data, ok := s.data[blockAddress]
 	if !ok {
 		return 0, ErrBlockNotFound
@@ -49,7 +46,7 @@ func (s *Shard) Clone() *Shard {
 
 	newShard.Healthy = s.Healthy
 	newShard.seedData = s.seedData
-	newShard.data = make(map[int]byte)
+	newShard.data = make(map[int64]byte)
 	for blockIndex, data := range s.data {
 		newShard.data[blockIndex] = data
 	}

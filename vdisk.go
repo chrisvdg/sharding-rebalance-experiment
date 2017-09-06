@@ -1,10 +1,7 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
-
-	blake2b "github.com/minio/blake2b-simd"
 )
 
 // defines the get shard algorithm
@@ -19,22 +16,26 @@ var (
 )
 
 // NewVdisk constructs a new vdisk
-func NewVdisk(shardCount int) *Vdisk {
+func NewVdisk(shardCount int64) *Vdisk {
 	var vdisk Vdisk
-	for i := 0; i < shardCount; i++ {
+	for i := int64(0); i < shardCount; i++ {
 		vdisk.Shards = append(vdisk.Shards, NewShard())
 	}
+	vdisk.offlineShards = make(map[int64]struct{})
+	vdisk.shardCount = shardCount
 
 	return &vdisk
 }
 
 // Vdisk vdisk represents a vdisk
 type Vdisk struct {
-	Shards []*Shard
+	Shards        []*Shard
+	offlineShards map[int64]struct{}
+	shardCount    int64
 }
 
 // SetBlock sets a block in a vdisk
-func (vdisk *Vdisk) SetBlock(blockIndex int, data byte) error {
+func (vdisk *Vdisk) SetBlock(blockIndex int64, data byte) error {
 	shardIndex, err := getShard(vdisk, blockIndex)
 	if err != nil {
 		return err
@@ -49,7 +50,7 @@ func (vdisk *Vdisk) SetBlock(blockIndex int, data byte) error {
 }
 
 // GetBlock gets the data from a block in a vdisk
-func (vdisk *Vdisk) GetBlock(blockIndex int) (byte, error) {
+func (vdisk *Vdisk) GetBlock(blockIndex int64) (byte, error) {
 	shardIndex, err := getShard(vdisk, blockIndex)
 	if err != nil {
 		return 0, err
@@ -71,18 +72,32 @@ func (vdisk *Vdisk) Clone() *Vdisk {
 		newVdisk.Shards = append(newVdisk.Shards, shard.Clone())
 	}
 
+	newVdisk.offlineShards = make(map[int64]struct{})
+	for shardIndex := range vdisk.offlineShards {
+		newVdisk.offlineShards[shardIndex] = struct{}{}
+	}
+
+	newVdisk.shardCount = vdisk.shardCount
+
 	return newVdisk
 }
 
 // FailShard set a shard to unhealthy and redistributes the data of the failed shard
-func (vdisk *Vdisk) FailShard(shardIndex int) error {
-	if shardIndex >= len(vdisk.Shards) {
+func (vdisk *Vdisk) FailShard(shardIndex int64) error {
+	if shardIndex >= int64(len(vdisk.Shards)) {
 		return ErrShardIndexNotFound
 	}
 
-	s := vdisk.Shards[shardIndex]
+	if _, offline := vdisk.offlineShards[shardIndex]; offline {
+		return nil // nothing to do
+	}
 
+	vdisk.offlineShards[shardIndex] = struct{}{}
+
+	s := vdisk.Shards[shardIndex]
 	s.SetHealth(false)
+
+	// redistribute
 	for blockIndex, data := range s.data {
 		err := vdisk.SetBlock(blockIndex, data)
 		if err != nil {
@@ -94,8 +109,8 @@ func (vdisk *Vdisk) FailShard(shardIndex int) error {
 }
 
 // HealthyShards returns the count of healthy shard in a vdisk
-func (vdisk *Vdisk) HealthyShards() int {
-	healthyCount := 0
+func (vdisk *Vdisk) HealthyShards() int64 {
+	var healthyCount int64
 
 	for _, shard := range vdisk.Shards {
 		if shard.OK() {
@@ -112,34 +127,31 @@ func (vdisk *Vdisk) PrintShardingState() {
 	for i := range vdisk.Shards {
 		s := vdisk.Shards[i]
 		blocks := s.BlockCount()
-		var health string
 		if s.OK() {
-			health = "healthy"
+			fmt.Printf("Shard %d is healthy and has %d blocks\n", i, blocks)
 		} else {
-			health = "unhealthy"
+			fmt.Printf("Shard %d is unhealthy\n", i)
 		}
-
-		fmt.Printf("Shard %d is %s and has %d blocks\n", i, health, blocks)
 	}
 }
 
 // GetShardIndex returns a shardindex for a given blockindex
-func getShardIndexSimpleModulo(vdisk *Vdisk, blockIndex int) (int, error) {
-	return blockIndex % len(vdisk.Shards), nil
+func getShardIndexSimpleModulo(vdisk *Vdisk, blockIndex int64) (int64, error) {
+	return blockIndex % vdisk.shardCount, nil
 }
 
-func getShardGeertsAlgo(vdisk *Vdisk, blockIndex int) (int, error) {
-	shardCount := len(vdisk.Shards)
-	shardIndex := blockIndex % shardCount
+func getShardGeertsAlgo(vdisk *Vdisk, blockIndex int64) (int64, error) {
+	shardIndex := blockIndex % vdisk.shardCount
 	s := vdisk.Shards[shardIndex]
 	if s.OK() {
 		return shardIndex, nil
 	}
 
-	shardIndex = hash(blockIndex, s.seedData, vdisk.HealthyShards())
-	shardCounter := 0
+	//shardIndex = jumpConsistentHash(blockIndex, vdisk.shardCount)
+	shardIndex = blockIndex % vdisk.HealthyShards()
+	var shardCounter int64
 
-	for i := 0; i < shardCount; i++ {
+	for i := int64(0); i < vdisk.shardCount; i++ {
 		if !vdisk.Shards[i].OK() {
 			continue
 		}
@@ -151,17 +163,44 @@ func getShardGeertsAlgo(vdisk *Vdisk, blockIndex int) (int, error) {
 	return 0, ErrShardIndexNotFound
 }
 
-func hash(blockIndex int, shardFeedString []byte, healthyShards int) int {
-	binBlockIndex := make([]byte, 8)
-	binary.LittleEndian.PutUint64(binBlockIndex, uint64(blockIndex))
+func getShardIndexGlen(vdisk *Vdisk, blockIndex int64) (int64, error) {
+	// first try the modulo sharding,
+	// which will work for all default online shards
+	// and thus keep it as cheap as possible
+	si := blockIndex % vdisk.shardCount
+	var offline bool
+	if _, offline = vdisk.offlineShards[si]; !offline {
+		return si, nil
+	}
 
-	hasher := blake2b.New256()
-	hasher.Write(binBlockIndex)
-	hasher.Write(shardFeedString)
+	// keep trying until we find a non-offline shard
+	// in the same reproducable manner
+	// (another kind of tracing)
+	var i int64
+	for {
+		si = int64(jumpConsistentHash(uint64(blockIndex), int32(vdisk.shardCount)))
+		if _, offline = vdisk.offlineShards[si]; !offline {
+			return si, nil
+		}
+		blockIndex++
+		if i > vdisk.shardCount {
+			break
+		}
+	}
 
-	hash := hasher.Sum(nil)
+	return 0, ErrShardIndexNotFound
+}
 
-	hashIndex := hash[0]
+// jumpConsistentHash taken from https://arxiv.org/pdf/1406.2294.pdf
+func jumpConsistentHash(key uint64, numBuckets int32) int32 {
+	var b int64 = -1
+	var j int64
 
-	return int(hashIndex) % healthyShards
+	for j < int64(numBuckets) {
+		b = j
+		key = key*2862933555777941757 + 1
+		j = int64(float64(b+1) * (float64(int64(1)<<31) / float64((key>>33)+1)))
+	}
+
+	return int32(b)
 }

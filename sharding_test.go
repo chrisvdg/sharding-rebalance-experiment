@@ -12,8 +12,8 @@ import (
 var (
 	orgVdiskData           Vdisk
 	vdiskWithUnheathyShard *Vdisk
-	shardToFail            = 6
-	callList               []int
+	shardToFail            = int64(6)
+	callList               []int64
 	callAmount             = 1000000
 )
 
@@ -72,7 +72,34 @@ func BenchmarkUnHealthyShard(b *testing.B) {
 	loopCallList(callList, vdisk)
 }
 
-func loopCallList(callList []int, vdisk *Vdisk) error {
+func TestGlensAlgo(t *testing.T) {
+	assert := assert.New(t)
+	getShard = getShardIndexGlen
+	vdisk := orgVdiskData.Clone()
+
+	fmt.Println("\nreading with healthy shards")
+	err := loopCallList(callList, vdisk)
+	assert.NoError(err, "didn't expect an error")
+
+	err = vdisk.FailShard(6)
+	assert.NoError(err)
+
+	fmt.Println("\nreading with 1 unhealthy shard")
+	err = loopCallList(callList, vdisk)
+	assert.NoError(err, "didn't expect an error")
+
+	// check if original shard 6 data is preserved
+	for blockindex, data := range orgVdiskData.Shards[6].data {
+		newData, err := vdisk.GetBlock(blockindex)
+
+		assert.NoError(err)
+		assert.Equal(data, newData)
+	}
+
+	vdisk.PrintShardingState()
+}
+
+func loopCallList(callList []int64, vdisk *Vdisk) error {
 	fmt.Printf("Reading vdisk %d times...\n", callAmount)
 	start1 := time.Now()
 
@@ -87,10 +114,10 @@ func loopCallList(callList []int, vdisk *Vdisk) error {
 	return nil
 }
 
-func generateVdisk(shards int, blocks int) *Vdisk {
+func generateVdisk(shards int64, blocks int64) *Vdisk {
 	vdisk := NewVdisk(shards)
 
-	for i := 0; i < blocks; i++ {
+	for i := int64(0); i < blocks; i++ {
 		data := genRandomByte()
 		vdisk.SetBlock(i, data)
 	}
@@ -106,11 +133,11 @@ func genRandomByte() byte {
 }
 
 // generateCallList generates a list of addresses the calling test portion can use
-func generateCallList(lenght int, shard *Shard) []int {
-	var callList []int
+func generateCallList(lenght int, shard *Shard) []int64 {
+	var callList []int64
 	rand.Seed(time.Now().Unix())
 
-	var blockAddresses []int
+	var blockAddresses []int64
 	for blockAddress := range shard.data {
 		blockAddresses = append(blockAddresses, blockAddress)
 	}
@@ -124,8 +151,8 @@ func generateCallList(lenght int, shard *Shard) []int {
 
 func init() {
 	var (
-		shards = 10
-		blocks = 10000
+		shards = int64(10)
+		blocks = int64(10000)
 	)
 	orgVdiskData = *generateVdisk(shards, blocks)
 	callList = generateCallList(callAmount, orgVdiskData.Shards[shardToFail])
